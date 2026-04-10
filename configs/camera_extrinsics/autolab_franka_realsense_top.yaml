@@ -1,0 +1,13 @@
+# Camera extrinsics for the AutoLab Franka setup - overhead RealSense camera.
+#
+# All values are expressed in the robot world frame (base link origin).
+#
+# position: [x, y, z] in meters
+# rpy_radians: [roll, pitch, yaw] in radians (applied in that order)
+#
+# For your own setup, create
+# a new file in this directory, then point the ZedCamera config at it via
+# the `extrinsics_file` field.
+
+position: [1.35, 0.00, 0.53]
+rpy_radians: [-3.14159, -1.13894, 1.57080]
