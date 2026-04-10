@@ -119,8 +119,19 @@ class FrankaPanda(Robot):
         try:
             self.interface = panda_py.Panda(host_name)
         except RuntimeError as exc:
+            msg = str(exc)
+            if "Incompatible library version" in msg:
+                raise RuntimeError(
+                    f"Failed to connect to Franka FCI at {host_name}: {msg}. "
+                    "This usually means the loaded libfranka/panda_py build does not match robot server protocol. "
+                    "Reinstall the project Franka extra (`uv pip install -e .[franka_panda]`), "
+                    "remove conflicting system/pip panda_py installs, and verify the imported panda_py path/version. "
+                    "If multiple libfranka versions exist on the machine, ensure the runtime links against the compatible one. "
+                    "See Franka compatibility table: https://frankaemika.github.io/docs/compatibility.html"
+                ) from exc
+
             raise RuntimeError(
-                f"Failed to connect to Franka FCI at {host_name}: {exc}. "
+                f"Failed to connect to Franka FCI at {host_name}: {msg}. "
                 "If FCI is already enabled on the robot, verify that this host is the allowed FCI client, "
                 "the robot is in FCI mode, and no other process is connected. "
                 "You can also pass Desk credentials (username/password) in robot config so this driver can call activate_fci()."

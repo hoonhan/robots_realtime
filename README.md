@@ -45,6 +45,21 @@ uv pip install -e .[franka_panda]
 uv pip install -e .[sensors]
 ```
 
+### Franka FR3 / Panda troubleshooting
+
+If you see `Incompatible library version (server version: 10, library version: X)`, your runtime is loading a mismatched `libfranka`/`panda_py` build.
+
+```bash
+# Reinstall Franka bindings from this repo
+uv pip install -e .[franka_panda]
+
+# Verify which panda_py gets imported
+python -c "import panda_py; print(panda_py.__file__)"
+```
+
+Also remove conflicting global/system `panda_py` installs and verify compatibility against the Franka table:
+https://frankaemika.github.io/docs/compatibility.html
+
 ---
 
 ## Usage / Quickstart
