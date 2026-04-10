@@ -6,10 +6,17 @@ from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional
 
 import numpy as np
-import panda_py
 from i2rt.robots.robot import Robot
 from i2rt.utils.utils import RateRecorder
-from panda_py import controllers
+
+try:
+    import panda_py
+    from panda_py import controllers
+except ImportError as exc:
+    raise ImportError(
+        "Franka support requires panda_py. Install with: `uv pip install -e .[franka_panda]` "
+        "(or `uv sync --extra franka_panda`)."
+    ) from exc
 from scipy.spatial.transform import Rotation as R
 
 from robots_realtime.robots.utils import Rate

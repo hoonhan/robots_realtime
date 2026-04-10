@@ -36,7 +36,13 @@ git clone --recurse-submodules https://github.com/uynitsuj/robots_realtime.git
 cd robots_realtime
 # if already cloned, or some of the submodules are incompletely cloned, run
 git submodule update --init --recursive
-uv venv --python 3.11 && uv pip install -e .
+uv venv --python 3.11
+# base install
+uv pip install -e .
+# if using Franka FR3 / Panda hardware:
+uv pip install -e .[franka_panda]
+# if using camera SDK backends (ZED / RealSense):
+uv pip install -e .[sensors]
 ```
 
 ---
