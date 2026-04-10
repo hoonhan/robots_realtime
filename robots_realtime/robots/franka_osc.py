@@ -116,7 +116,15 @@ class FrankaPanda(Robot):
             self.desk = panda_py.Desk(host_name, username, password)
             self.desk.activate_fci()
 
-        self.interface = panda_py.Panda(host_name)
+        try:
+            self.interface = panda_py.Panda(host_name)
+        except RuntimeError as exc:
+            raise RuntimeError(
+                f"Failed to connect to Franka FCI at {host_name}: {exc}. "
+                "If FCI is already enabled on the robot, verify that this host is the allowed FCI client, "
+                "the robot is in FCI mode, and no other process is connected. "
+                "You can also pass Desk credentials (username/password) in robot config so this driver can call activate_fci()."
+            ) from exc
         self.state = self.interface.get_state()
         self.fk = panda_py.fk
         self._num_dofs = 7

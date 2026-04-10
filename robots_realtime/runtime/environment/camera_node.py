@@ -100,7 +100,11 @@ class CameraNode(Node):
 
         # Depth: support both other_sensors["depth"] (standard) and the
         # dynamic depth_data attribute that ZedCamera sets directly.
-        depth = (data.other_sensors or {}).get("depth") or getattr(data, "depth_data", None)
+        depth = None
+        if data.other_sensors is not None and "depth" in data.other_sensors:
+            depth = data.other_sensors["depth"]
+        if depth is None:
+            depth = getattr(data, "depth_data", None)
         if depth is not None:
             msg["depth_data"] = depth
 
