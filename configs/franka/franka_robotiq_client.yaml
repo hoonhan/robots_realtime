@@ -12,7 +12,7 @@ nodes:
       ik_rate: 100.0
       robotiq_gripper: true
       visualize_rgbd: false
-      client_host: "0.0.0.0"
+      client_host: "127.0.0.1"
       client_port: 9000
     arm_key: left
     ik_freq: 100.0

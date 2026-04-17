@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from copy import deepcopy
@@ -18,6 +19,8 @@ from robots_realtime.robots.inverse_kinematics.franka_pyroki import FrankaPyroki
 from robots_realtime.sensors.cameras.camera_utils import obs_get_rgb, resize_with_center_crop
 from robots_realtime.utils.depth_utils import depth_color_to_pointcloud
 from robots_realtime.utils.server_client_utils import SyncMsgpackNumpyClient
+
+logger = logging.getLogger(__name__)
 
 
 class FrankaOscClientCartesianAgent(Agent):
@@ -40,7 +43,7 @@ class FrankaOscClientCartesianAgent(Agent):
         visualize_rgbd: bool = False,
         robotiq_gripper: bool = False,
         viser_port: int = 8080,
-        client_host: str = "0.0.0.0",
+        client_host: str = "127.0.0.1",
         client_port: int = 9000,
     ) -> None:
         self.bimanual = bimanual
@@ -71,6 +74,10 @@ class FrankaOscClientCartesianAgent(Agent):
                 0.0, 0.0, np.pi / 4
             ).wxyz
             self.ik.transform_handles.get("left").tcp_offset_frame.position = (0.0, 0.0, -0.157)
+
+        if client_host == "0.0.0.0":
+            logger.warning("client_host=0.0.0.0 is not connectable; using 127.0.0.1 instead")
+            client_host = "127.0.0.1"
 
         self.franka_client = SyncMsgpackNumpyClient(host=client_host, port=client_port)
 
