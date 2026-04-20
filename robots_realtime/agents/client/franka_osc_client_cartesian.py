@@ -79,7 +79,17 @@ class FrankaOscClientCartesianAgent(Agent):
             logger.warning("client_host=0.0.0.0 is not connectable; using 127.0.0.1 instead")
             client_host = "127.0.0.1"
 
-        self.franka_client = SyncMsgpackNumpyClient(host=client_host, port=client_port)
+        try:
+            self.franka_client = SyncMsgpackNumpyClient(host=client_host, port=client_port)
+        except ConnectionRefusedError as exc:
+            raise RuntimeError(
+                "Failed to connect to external Franka client server at "
+                f"{client_host}:{client_port}. "
+                "This agent requires a separate msgpack server process. "
+                "Start that server first (or switch to the non-client teleop config "
+                "'configs/franka/franka_robotiq_viser_teleop.yaml' if you do not need "
+                "the external client)."
+            ) from exc
 
         self.obs: Optional[Dict[str, Any]] = None
         self._update_period = 0.05
@@ -162,6 +172,27 @@ class FrankaOscClientCartesianAgent(Agent):
 
         self.camera_frustum_handles: Dict[str, viser.CameraFrustumHandle] = {}
 
+    def _get_intrinsics_matrix(self, cam_obs: Dict[str, Any]) -> Optional[np.ndarray]:
+        """Best-effort extraction of a 3x3 camera intrinsics matrix from camera obs."""
+
+        intrinsics = cam_obs.get("intrinsics")
+        if not isinstance(intrinsics, dict):
+            return None
+
+        if "intrinsics_matrix" in intrinsics:
+            return np.asarray(intrinsics["intrinsics_matrix"])
+
+        for key in ("left", "rgb", "depth", "right"):
+            entry = intrinsics.get(key)
+            if isinstance(entry, dict) and "intrinsics_matrix" in entry:
+                return np.asarray(entry["intrinsics_matrix"])
+
+        for entry in intrinsics.values():
+            if isinstance(entry, dict) and "intrinsics_matrix" in entry:
+                return np.asarray(entry["intrinsics_matrix"])
+
+        return None
+
     def _update_visualization(self) -> None:
         """Continuously sync live robot state and camera frames into Viser."""
 
@@ -217,21 +248,21 @@ class FrankaOscClientCartesianAgent(Agent):
 
                     if "depth_data" in obs_copy[key] and self.visualize_rgbd:
                         depth_data = obs_copy[key]["depth_data"]
-                        points, colors = depth_color_to_pointcloud(
-                            depth=depth_data,
-                            rgb_img=image,
-                            intrinsics=obs_copy[key]["intrinsics"]["left"][
-                                "intrinsics_matrix"
-                            ],  # We assume we're taking left camera image from a stereo pair
-                            subsample_factor=4,
-                            depth_clip_range=(0.015, 1.2),
-                        )
-                        self.viser_server.scene.add_point_cloud(
-                            name=f"camera_frustum_{key}/point_cloud_{key}",
-                            points=points,
-                            colors=colors,
-                            point_size=0.002,
-                        )
+                        intrinsics_matrix = self._get_intrinsics_matrix(obs_copy[key])
+                        if intrinsics_matrix is not None:
+                            points, colors = depth_color_to_pointcloud(
+                                depth=depth_data,
+                                rgb_img=image,
+                                intrinsics=intrinsics_matrix,
+                                subsample_factor=4,
+                                depth_clip_range=(0.015, 1.2),
+                            )
+                            self.viser_server.scene.add_point_cloud(
+                                name=f"camera_frustum_{key}/point_cloud_{key}",
+                                points=points,
+                                colors=colors,
+                                point_size=0.002,
+                            )
 
                 time.sleep(self._update_period)
 
