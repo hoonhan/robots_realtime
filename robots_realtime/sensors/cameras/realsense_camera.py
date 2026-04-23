@@ -26,6 +26,8 @@ class RealSenseCamera(CameraDriver):
     image_transfer_time_offset_ms: float = 0.0
     name: str | None = None
     extrinsics_file: str | None = None
+    frame_timeout_ms: int = 5000
+    max_frame_timeouts_before_restart: int = 3
 
     def __post_init__(self) -> None:
         try:
@@ -54,6 +56,7 @@ class RealSenseCamera(CameraDriver):
             self.config.enable_stream(rs.stream.depth, width, height, rs.format.z16, self.fps)
 
         self.profile = self.pipeline.start(self.config)
+        self._consecutive_timeouts = 0
 
         self.align = rs.align(rs.stream.color) if self.enable_depth else None
 
@@ -105,8 +108,38 @@ class RealSenseCamera(CameraDriver):
         pose_mat = vtf.SE3(wxyz_xyz=np.concatenate([wxyz, position])).as_matrix()
         return {"position": position, "wxyz": wxyz, "pose_mat": pose_mat}
 
+    def _restart_pipeline(self) -> None:
+        logging.warning(
+            "RealSenseCamera: restarting pipeline after %d consecutive frame timeouts",
+            self._consecutive_timeouts,
+        )
+        try:
+            self.pipeline.stop()
+        except Exception:
+            pass
+        self.profile = self.pipeline.start(self.config)
+        self._consecutive_timeouts = 0
+
     def read(self) -> CameraData:
-        frames = self.pipeline.wait_for_frames()
+        try:
+            frames = self.pipeline.wait_for_frames(timeout_ms=self.frame_timeout_ms)
+            self._consecutive_timeouts = 0
+        except RuntimeError as exc:
+            if "Frame didn't arrive" not in str(exc):
+                raise
+            self._consecutive_timeouts += 1
+            logging.warning(
+                "RealSenseCamera: frame timeout (%d/%d): %s",
+                self._consecutive_timeouts,
+                self.max_frame_timeouts_before_restart,
+                exc,
+            )
+            if self._consecutive_timeouts >= self.max_frame_timeouts_before_restart:
+                self._restart_pipeline()
+            raise RuntimeError(
+                f"RealSenseCamera: frame did not arrive within {self.frame_timeout_ms}ms"
+            ) from exc
+
         if self.align is not None:
             frames = self.align.process(frames)
 

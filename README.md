@@ -60,6 +60,26 @@ python -c "import panda_py; print(panda_py.__file__)"
 Also remove conflicting global/system `panda_py` installs and verify compatibility against the Franka table:
 https://frankaemika.github.io/docs/compatibility.html
 
+If enabling a VPN (e.g. Cloudflare WARP) breaks local Ethernet access to FR3 FCI, use split tunneling so FR3 traffic does **not** go through VPN:
+
+```bash
+# Example: FR3 subnet is 172.16.0.0/16 and laptop Ethernet interface is enp3s0
+ip route replace 172.16.0.0/16 dev enp3s0
+
+# (optional) Pin the exact robot IP via Ethernet gateway/interface
+ip route replace 172.16.0.2 dev enp3s0
+```
+
+Practical checklist:
+- Keep robots_realtime (FR3 FCI client) on the Dell laptop physically connected to FR3.
+- Run remote policy/service (e.g. cap-x) on the server through VPN.
+- Add FR3 subnet/IP to VPN exclude routes (split tunnel) in WARP so `172.x.x.x` stays on Ethernet.
+- Verify route selection before starting `rr-session`:
+
+```bash
+ip route get <fr3_ip>
+```
+
 ---
 
 ## Usage / Quickstart
