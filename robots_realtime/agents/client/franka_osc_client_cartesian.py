@@ -288,7 +288,15 @@ class FrankaOscClientCartesianAgent(Agent):
         response = self.franka_client.send_request(self.obs)
 
         if response.get(b"left") is not None:
-            self.hyrl_joint_pos = np.asarray(response.get(b"left").get(b"joint_pos"), dtype=np.float32)
+            target = np.asarray(response.get(b"left").get(b"joint_pos"), dtype=np.float32)
+
+            # 안전한 joint range. 임시로 margin 둠.
+            lower = np.array([-2.8, -1.6, -2.8, -2.8, -2.8, 0.0, -2.8], dtype=np.float32)
+            upper = np.array([ 2.8,  1.6,  2.8, -0.1,  2.8, 3.6,  2.8], dtype=np.float32)
+
+            target = np.clip(target, lower, upper)
+            self.hyrl_joint_pos = target
+            # self.hyrl_joint_pos = np.asarray(response.get(b"left").get(b"joint_pos"), dtype=np.float32)
             self.hyrl_gripper_pos = np.asarray(response.get(b"left").get(b"gripper"), dtype=np.float32)
         print(response)
 

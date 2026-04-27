@@ -43,11 +43,12 @@ KD_6D = np.array([KD_pos] * 3 + [KD_ori] * 3)
 # Kp_null = np.array([50.0, 50.0, 50.0, 50.0, 40.0, 25.0, 25.0])
 # Kp_null = np.array([30.0, 30.0, 25.0, 25.0, 20.0, 10.0, 10.0])
 # Kp_null = np.array([2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0])
-Kp_null = np.array([5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0])
-
-# Kp_null = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+Kp_null = np.array([30.0, 30.0, 25.0, 25.0, 15.0, 10.0, 10.0])
 damping_ratio = 2.0
 Kd_null = damping_ratio * 2.0 * np.sqrt(Kp_null)
+# Kp_null = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+# damping_ratio = 2.0
+# Kd_null = damping_ratio * 2.0 * np.sqrt(Kp_null)
 
 GRIPPER_DEFAULT_SPEED = 10.0
 GRIPPER_INITIAL_FORCE = 1.0
@@ -164,7 +165,13 @@ class FrankaPanda(Robot):
         self.model = self.interface.get_model()
         self.frame = panda_py.libfranka.Frame.kFlange
 
-        self.ctrl = controllers.AppliedTorque()
+        joint_stiffness = np.array([300, 300, 300, 300, 250, 150, 150], dtype=np.float64)
+        joint_damping = np.array([40, 40, 40, 20, 20, 20, 15], dtype=np.float64)
+        self.ctrl = controllers.JointPosition(
+            stiffness=joint_stiffness,
+            damping=joint_damping,
+            filter_coeff=1.0
+        )
         print("starting controller")
 
         self.interface.start_controller(self.ctrl)
@@ -192,6 +199,45 @@ class FrankaPanda(Robot):
         }
 
     def run(self) -> None:
+        rate = Rate(100, rate_name="franka_joint_position_control_loop")
+
+        with RateRecorder(name=self) as rec:
+            while not self._stop_event.is_set():
+                rate.sleep()
+                rec.track()
+
+                with self._cmd_lock:
+                    if hasattr(self, "gripper"):
+                        joint_cmd = self._joint_cmd[:-1].copy()
+                    else:
+                        joint_cmd = self._joint_cmd.copy()
+
+                state = self.interface.get_state()
+                self.state = state
+
+                q = np.asarray(state.q)
+
+                # Optional safety: per-step delta limit
+                max_delta = 0.03  # rad per control tick, conservative
+                joint_cmd_safe = q + np.clip(joint_cmd - q, -max_delta, max_delta)
+
+                if not hasattr(self, "_dbg_t"):
+                    self._dbg_t = 0.0
+
+                if time.time() - self._dbg_t > 0.5:
+                    print(
+                        "[JOINT POSITION DEBUG]",
+                        "q=", np.round(q, 5),
+                        "cmd=", np.round(joint_cmd, 5),
+                        "safe_cmd=", np.round(joint_cmd_safe, 5),
+                        "err_norm=", float(np.linalg.norm(joint_cmd - q)),
+                        flush=True,
+                    )
+                    self._dbg_t = time.time()
+
+                self.ctrl.set_control(joint_cmd_safe)
+
+    def run_old(self) -> None:
         rate = Rate(300, rate_name="franka_osc_control_loop")
         with RateRecorder(name=self) as rec:
             with self.interface.create_context(frequency=300) as ctx:
@@ -295,7 +341,6 @@ class FrankaPanda(Robot):
                         )  # If far away from home pose at init, clip torque to avoid high velocity homing
                         print(f"Clipping torque to {clip_value}")
                         print(tau)
-
                     self.ctrl.set_control(tau)
 
                     if self._joint_state_saver is not None:
