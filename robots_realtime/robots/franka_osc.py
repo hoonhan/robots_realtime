@@ -202,8 +202,8 @@ class FrankaPanda(Robot):
 
         self.ctrl_thread_start_time = time.time()
 
-        self._update_rate = RateRecorder(name="update_rate")
-        self._update_rate.start()
+        # Temporarily disable RateRecorder in execution-mode debugging path.
+        self._update_rate = None
         self._slow_set_control_count = 0
         self._slow_get_state_count = 0
         self._state_lock_timeout_count = 0
@@ -232,64 +232,61 @@ class FrankaPanda(Robot):
             period = 0.01
             next_t = time.perf_counter()
 
-            with RateRecorder(name=self) as rec:
-                print("[CONTROL LOOP] RateRecorder entered", flush=True)
+            print("[CONTROL LOOP] RateRecorder bypassed", flush=True)
 
-                loop_i = 0
-                while not self._stop_event.is_set():
-                    loop_i += 1
+            loop_i = 0
+            while not self._stop_event.is_set():
+                loop_i += 1
 
-                    with self._cmd_lock:
-                        if hasattr(self, "gripper"):
-                            joint_cmd = np.asarray(self._joint_cmd[:-1], dtype=np.float64).copy()
-                        else:
-                            joint_cmd = np.asarray(self._joint_cmd, dtype=np.float64).copy()
+                with self._cmd_lock:
+                    if hasattr(self, "gripper"):
+                        joint_cmd = np.asarray(self._joint_cmd[:-1], dtype=np.float64).copy()
+                    else:
+                        joint_cmd = np.asarray(self._joint_cmd, dtype=np.float64).copy()
 
-                    # Single writer path for the controller command.
-                    t_set0 = time.perf_counter()
-                    self.ctrl.set_control(joint_cmd)
-                    dt_set = time.perf_counter() - t_set0
-                    if dt_set > 0.02:
-                        self._slow_set_control_count += 1
-                        if self._slow_set_control_count % 20 == 1:
-                            print(
-                                f"[FRANKA DEBUG] slow set_control dt={dt_set*1000:.1f}ms "
-                                f"(count={self._slow_set_control_count})",
-                                flush=True,
-                            )
-
-                    # Refresh state snapshot in control thread.
-                    # Important: do NOT hold _state_lock while calling get_state()
-                    # because get_state() can block in execution mode.
-                    t_state0 = time.perf_counter()
-                    new_state = self.interface.get_state()
-                    dt_state = time.perf_counter() - t_state0
-                    if dt_state > 0.02:
-                        self._slow_get_state_count += 1
-                        if self._slow_get_state_count % 20 == 1:
-                            print(
-                                f"[FRANKA DEBUG] slow get_state dt={dt_state*1000:.1f}ms "
-                                f"(count={self._slow_get_state_count})",
-                                flush=True,
-                            )
-                    with self._state_lock:
-                        self.state = new_state
-
-                    if loop_i % 50 == 1:
+                # Single writer path for the controller command.
+                t_set0 = time.perf_counter()
+                self.ctrl.set_control(joint_cmd)
+                dt_set = time.perf_counter() - t_set0
+                if dt_set > 0.02:
+                    self._slow_set_control_count += 1
+                    if self._slow_set_control_count % 20 == 1:
                         print(
-                            "[JOINT POSITION DEBUG]",
-                            "cmd=", np.round(joint_cmd, 5),
+                            f"[FRANKA DEBUG] slow set_control dt={dt_set*1000:.1f}ms "
+                            f"(count={self._slow_set_control_count})",
                             flush=True,
                         )
 
-                    rec.track()
+                # Refresh state snapshot in control thread.
+                # Important: do NOT hold _state_lock while calling get_state()
+                # because get_state() can block in execution mode.
+                t_state0 = time.perf_counter()
+                new_state = self.interface.get_state()
+                dt_state = time.perf_counter() - t_state0
+                if dt_state > 0.02:
+                    self._slow_get_state_count += 1
+                    if self._slow_get_state_count % 20 == 1:
+                        print(
+                            f"[FRANKA DEBUG] slow get_state dt={dt_state*1000:.1f}ms "
+                            f"(count={self._slow_get_state_count})",
+                            flush=True,
+                        )
+                with self._state_lock:
+                    self.state = new_state
 
-                    next_t += period
-                    sleep_s = next_t - time.perf_counter()
-                    if sleep_s > 0:
-                        time.sleep(sleep_s)
-                    else:
-                        next_t = time.perf_counter()
+                if loop_i % 50 == 1:
+                    print(
+                        "[JOINT POSITION DEBUG]",
+                        "cmd=", np.round(joint_cmd, 5),
+                        flush=True,
+                    )
+
+                next_t += period
+                sleep_s = next_t - time.perf_counter()
+                if sleep_s > 0:
+                    time.sleep(sleep_s)
+                else:
+                    next_t = time.perf_counter()
 
         except BaseException as exc:
             logger.exception("Franka control_loop crashed")
@@ -316,7 +313,8 @@ class FrankaPanda(Robot):
             f"Joint position array length mismatch. num_dofs: {self._num_dofs}, joint_pos: {len(joint_pos)}."
         )
 
-        self._update_rate.track()
+        if self._update_rate is not None:
+            self._update_rate.track()
 
         with self._cmd_lock:
             self._joint_cmd = np.asarray(joint_pos, dtype=np.float64).copy()
