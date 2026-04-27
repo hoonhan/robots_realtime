@@ -105,12 +105,15 @@ class RobotNode(Node):
             if cmd is not None:
                 # Use np.array() to ensure a writable copy (np.asarray may return read-only view)
                 joint_pos = np.array(cmd["joint_pos"], dtype=np.float64)
-                # Debug: log commands every 100 steps
-                if not hasattr(self, '_step_count'):
-                    self._step_count = 0
-                self._step_count += 1
-                if self._step_count % 100 == 0:
-                    print(f"[{self.name}] RobotNode step {self._step_count}: received cmd, calling command_joint_pos with {joint_pos}")
+                # Debug: log commands every 100 commands.
+                if not hasattr(self, "_cmd_debug_count"):
+                    self._cmd_debug_count = 0
+                self._cmd_debug_count += 1
+                if self._cmd_debug_count % 100 == 0:
+                    print(
+                        f"[{self.name}] RobotNode: received command #{self._cmd_debug_count}, "
+                        f"calling command_joint_pos with {joint_pos}"
+                    )
                 self._robot.command_joint_pos(joint_pos)
             else:
                 if not hasattr(self, '_no_cmd_count'):
