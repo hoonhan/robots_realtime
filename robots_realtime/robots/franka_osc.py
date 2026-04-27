@@ -1,6 +1,7 @@
 # type: ignore
 # franka interface is referenced from https://github.com/JeanElsner/panda-py
 import logging
+import faulthandler
 import time
 from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional
@@ -227,6 +228,8 @@ class FrankaPanda(Robot):
 
     def run(self) -> None:
         print("[CONTROL LOOP] entered", flush=True)
+        # If the loop blocks, periodically dump all thread stacks to stderr.
+        faulthandler.dump_traceback_later(5.0, repeat=True)
 
         try:
             period = 0.01
@@ -245,8 +248,12 @@ class FrankaPanda(Robot):
                         joint_cmd = np.asarray(self._joint_cmd, dtype=np.float64).copy()
 
                 # Single writer path for the controller command.
+                if loop_i <= 3:
+                    print(f"[FRANKA DEBUG] before set_control loop={loop_i}", flush=True)
                 t_set0 = time.perf_counter()
                 self.ctrl.set_control(joint_cmd)
+                if loop_i <= 3:
+                    print(f"[FRANKA DEBUG] after set_control loop={loop_i}", flush=True)
                 dt_set = time.perf_counter() - t_set0
                 if dt_set > 0.02:
                     self._slow_set_control_count += 1
@@ -260,8 +267,12 @@ class FrankaPanda(Robot):
                 # Refresh state snapshot in control thread.
                 # Important: do NOT hold _state_lock while calling get_state()
                 # because get_state() can block in execution mode.
+                if loop_i <= 3:
+                    print(f"[FRANKA DEBUG] before get_state loop={loop_i}", flush=True)
                 t_state0 = time.perf_counter()
                 new_state = self.interface.get_state()
+                if loop_i <= 3:
+                    print(f"[FRANKA DEBUG] after get_state loop={loop_i}", flush=True)
                 dt_state = time.perf_counter() - t_state0
                 if dt_state > 0.02:
                     self._slow_get_state_count += 1
@@ -292,6 +303,8 @@ class FrankaPanda(Robot):
             logger.exception("Franka control_loop crashed")
             print("[CONTROL LOOP] crashed:", repr(exc), flush=True)
             raise
+        finally:
+            faulthandler.cancel_dump_traceback_later()
 
 
     def enable_arm(self) -> None:
