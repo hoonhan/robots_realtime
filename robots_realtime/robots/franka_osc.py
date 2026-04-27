@@ -139,6 +139,9 @@ class FrankaPanda(Robot):
                 "You can also pass Desk credentials (username/password) in robot config so this driver can call activate_fci()."
             ) from exc
         self.state = self.interface.get_state()
+        self._joint_pos_snapshot = np.array(self.state.q, dtype=np.float64, copy=True)
+        self._joint_vel_snapshot = np.array(self.state.dq, dtype=np.float64, copy=True)
+        self._joint_eff_snapshot = np.array(self.state.tau_J, dtype=np.float64, copy=True)
         self.fk = panda_py.fk
         self._num_dofs = 7
         self._stop_event = Event()
@@ -282,6 +285,9 @@ class FrankaPanda(Robot):
                             flush=True,
                         )
                 self.state = new_state
+                self._joint_pos_snapshot = np.array(new_state.q, dtype=np.float64, copy=True)
+                self._joint_vel_snapshot = np.array(new_state.dq, dtype=np.float64, copy=True)
+                self._joint_eff_snapshot = np.array(new_state.tau_J, dtype=np.float64, copy=True)
 
                 if loop_i % 50 == 1:
                     print(
@@ -348,13 +354,15 @@ class FrankaPanda(Robot):
         # Read the latest snapshot cached by the control thread.
         # Pointer assignment/read is atomic under the GIL; avoid lock-related
         # stalls in execution mode debugging.
-        state = self.state
+        joint_pos = self._joint_pos_snapshot
+        joint_vel = self._joint_vel_snapshot
+        joint_eff = self._joint_eff_snapshot
         obs = {
-            "joint_pos": state.q
+            "joint_pos": joint_pos
             if not hasattr(self, "gripper")
-            else np.concatenate([state.q, [self._last_gripper_state]]),
-            "joint_vel": state.dq,
-            "joint_eff": state.tau_J,
+            else np.concatenate([joint_pos, [self._last_gripper_state]]),
+            "joint_vel": joint_vel,
+            "joint_eff": joint_eff,
         }
         return obs
 

@@ -148,7 +148,17 @@ class RobotNode(Node):
                 if self._no_cmd_count % 100 == 0:
                     print(f"[{self.name}] RobotNode: NO COMMAND received from {self._cmd_topic} (count: {self._no_cmd_count})")
 
-        self.publish("joint_state", self._robot.get_observations(), ts=ts)
+        t_obs0 = time.perf_counter()
+        obs = self._robot.get_observations()
+        dt_obs = time.perf_counter() - t_obs0
+        if dt_obs > 0.02:
+            print(f"[{self.name}] DEBUG slow get_observations dt={dt_obs*1000:.1f}ms")
+
+        t_pub0 = time.perf_counter()
+        self.publish("joint_state", obs, ts=ts)
+        dt_pub = time.perf_counter() - t_pub0
+        if dt_pub > 0.02:
+            print(f"[{self.name}] DEBUG slow publish dt={dt_pub*1000:.1f}ms")
 
     def cleanup(self) -> None:
         self._cmd_stop.set()
