@@ -42,6 +42,9 @@ class Publisher:
 
         self._ctx = zmq.Context.instance()
         self._sock = self._ctx.socket(zmq.PUB)
+        # Never let a slow subscriber stall node.step(): keep a bounded queue
+        # and drop sends when back-pressured.
+        self._sock.setsockopt(zmq.SNDHWM, 1000)
         self._sock.connect(f"tcp://{host}:{port}")
         # Give the slow-joiner a moment to let subscriptions propagate
         time.sleep(0.01)
@@ -69,8 +72,11 @@ class Publisher:
 
         topic = f"{self._node_name}/{topic_suffix}"
         envelope = {"ts": ts_val, "src": self._node_name, "data": data}
-        self._sock.send_multipart([topic.encode(), pack(envelope)])
-        return True
+        try:
+            self._sock.send_multipart([topic.encode(), pack(envelope)], flags=zmq.NOBLOCK)
+            return True
+        except zmq.Again:
+            return False
 
     def close(self) -> None:
         self._sock.close(linger=0)
