@@ -178,7 +178,6 @@ class FrankaPanda(Robot):
         q0 = np.asarray(self.state.q, dtype=np.float64).copy()
 
         self._cmd_lock = Lock()
-        self._state_lock = Lock()
 
         if enable_gripper:
             self._joint_cmd = np.concatenate([q0, [float(self._last_gripper_state)]])
@@ -282,8 +281,7 @@ class FrankaPanda(Robot):
                             f"(count={self._slow_get_state_count})",
                             flush=True,
                         )
-                with self._state_lock:
-                    self.state = new_state
+                self.state = new_state
 
                 if loop_i % 50 == 1:
                     print(
@@ -348,21 +346,9 @@ class FrankaPanda(Robot):
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         # Read the latest snapshot cached by the control thread.
-        if self._state_lock.acquire(timeout=0.002):
-            try:
-                state = self.state
-            finally:
-                self._state_lock.release()
-        else:
-            # Avoid blocking RobotNode.step(); publish last known snapshot.
-            self._state_lock_timeout_count += 1
-            if self._state_lock_timeout_count % 100 == 1:
-                print(
-                    f"[FRANKA DEBUG] get_observations lock-timeout "
-                    f"(count={self._state_lock_timeout_count})",
-                    flush=True,
-                )
-            state = self.state
+        # Pointer assignment/read is atomic under the GIL; avoid lock-related
+        # stalls in execution mode debugging.
+        state = self.state
         obs = {
             "joint_pos": state.q
             if not hasattr(self, "gripper")
