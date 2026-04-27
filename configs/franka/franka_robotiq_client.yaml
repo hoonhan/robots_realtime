@@ -12,7 +12,7 @@ nodes:
       ik_rate: 100.0
       robotiq_gripper: true
       visualize_rgbd: false
-      client_host: "0.0.0.0"
+      client_host: "192.168.110.227"
       client_port: 9000
     arm_key: left
     ik_freq: 100.0
@@ -37,11 +37,3 @@ nodes:
     enable_depth: true
     extrinsics_file: configs/camera_extrinsics/autolab_franka_realsense_top.yaml
 
-  - type: CameraNode
-    name: camera_waist
-    driver: RealSenseCamera
-    device_id: "342222070738"
-    resolution: HD720
-    fps: 15
-    enable_depth: true
-    extrinsics_file: configs/camera_extrinsics/autolab_franka_realsense_waist.yaml

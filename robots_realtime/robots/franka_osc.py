@@ -6,10 +6,17 @@ from threading import Event, Lock, Thread
 from typing import Any, Dict, Optional
 
 import numpy as np
-import panda_py
 from i2rt.robots.robot import Robot
 from i2rt.utils.utils import RateRecorder
-from panda_py import controllers
+
+try:
+    import panda_py
+    from panda_py import controllers
+except ImportError as exc:
+    raise ImportError(
+        "Franka support requires panda_py. Install with: `uv pip install -e .[franka_panda]` "
+        "(or `uv sync --extra franka_panda`)."
+    ) from exc
 from scipy.spatial.transform import Rotation as R
 
 from robots_realtime.robots.utils import Rate
@@ -36,11 +43,12 @@ KD_6D = np.array([KD_pos] * 3 + [KD_ori] * 3)
 # Kp_null = np.array([50.0, 50.0, 50.0, 50.0, 40.0, 25.0, 25.0])
 # Kp_null = np.array([30.0, 30.0, 25.0, 25.0, 20.0, 10.0, 10.0])
 # Kp_null = np.array([2.0, 2.0, 2.0, 2.0, 2.0, 2.0, 2.0])
-Kp_null = np.array([5.0, 5.0, 5.0, 5.0, 5.0, 5.0, 5.0])
-
-# Kp_null = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+Kp_null = np.array([30.0, 30.0, 25.0, 25.0, 15.0, 10.0, 10.0])
 damping_ratio = 2.0
 Kd_null = damping_ratio * 2.0 * np.sqrt(Kp_null)
+# Kp_null = np.array([3.0, 3.0, 3.0, 3.0, 3.0, 3.0, 3.0])
+# damping_ratio = 2.0
+# Kd_null = damping_ratio * 2.0 * np.sqrt(Kp_null)
 
 GRIPPER_DEFAULT_SPEED = 10.0
 GRIPPER_INITIAL_FORCE = 1.0
@@ -109,7 +117,26 @@ class FrankaPanda(Robot):
             self.desk = panda_py.Desk(host_name, username, password)
             self.desk.activate_fci()
 
-        self.interface = panda_py.Panda(host_name)
+        try:
+            self.interface = panda_py.Panda(host_name)
+        except RuntimeError as exc:
+            msg = str(exc)
+            if "Incompatible library version" in msg:
+                raise RuntimeError(
+                    f"Failed to connect to Franka FCI at {host_name}: {msg}. "
+                    "This usually means the loaded libfranka/panda_py build does not match robot server protocol. "
+                    "Reinstall the project Franka extra (`uv pip install -e .[franka_panda]`), "
+                    "remove conflicting system/pip panda_py installs, and verify the imported panda_py path/version. "
+                    "If multiple libfranka versions exist on the machine, ensure the runtime links against the compatible one. "
+                    "See Franka compatibility table: https://frankaemika.github.io/docs/compatibility.html"
+                ) from exc
+
+            raise RuntimeError(
+                f"Failed to connect to Franka FCI at {host_name}: {msg}. "
+                "If FCI is already enabled on the robot, verify that this host is the allowed FCI client, "
+                "the robot is in FCI mode, and no other process is connected. "
+                "You can also pass Desk credentials (username/password) in robot config so this driver can call activate_fci()."
+            ) from exc
         self.state = self.interface.get_state()
         self.fk = panda_py.fk
         self._num_dofs = 7
@@ -138,20 +165,49 @@ class FrankaPanda(Robot):
         self.model = self.interface.get_model()
         self.frame = panda_py.libfranka.Frame.kFlange
 
-        self.ctrl = controllers.AppliedTorque()
-        print("starting controller")
+        joint_stiffness = np.array([300, 300, 300, 300, 250, 150, 150], dtype=np.float64)
+        joint_damping = np.array([40, 40, 40, 20, 20, 20, 15], dtype=np.float64)
+        self.ctrl = controllers.JointPosition(
+            stiffness=joint_stiffness,
+            damping=joint_damping,
+            filter_coeff=1.0
+        )
 
-        self.interface.start_controller(self.ctrl)
-
-        print("controller started")
+        # self.state는 이미 위에서 self.interface.get_state()로 받아둔 상태
+        q0 = np.asarray(self.state.q, dtype=np.float64).copy()
 
         self._cmd_lock = Lock()
-        self._joint_cmd = self.get_joint_pos()
+
+        if enable_gripper:
+            self._joint_cmd = np.concatenate([q0, [float(self._last_gripper_state)]])
+        else:
+            self._joint_cmd = q0
+
+        joint_stiffness = np.array([300, 300, 300, 300, 250, 150, 150], dtype=np.float64)
+        joint_damping = np.array([40, 40, 40, 20, 20, 20, 15], dtype=np.float64)
+
+        self.ctrl = controllers.JointPosition(
+            stiffness=joint_stiffness,
+            damping=joint_damping,
+            filter_coeff=1.0,
+        )
+
+        print("[INIT DEBUG] set initial control before start_controller", flush=True)
+        self.ctrl.set_control(q0)
+
+        print("starting controller", flush=True)
+        self.interface.start_controller(self.ctrl)
+        print("controller started", flush=True)
+
         self.ctrl_thread_start_time = time.time()
-        self._server_thread = Thread(target=self.run, name="control_loop")
-        self._server_thread.start()
+
         self._update_rate = RateRecorder(name="update_rate")
         self._update_rate.start()
+
+        self._server_thread = Thread(target=self.run, name="control_loop", daemon=True)
+        self._server_thread.start()
+
+        print("[INIT DEBUG] franka init done", flush=True)
 
     def __repr__(self) -> str:
         return f"FrankaPanda(name={self.name}, host_name={self.host_name})"
@@ -166,119 +222,49 @@ class FrankaPanda(Robot):
         }
 
     def run(self) -> None:
-        rate = Rate(300, rate_name="franka_osc_control_loop")
-        with RateRecorder(name=self) as rec:
-            with self.interface.create_context(frequency=300) as ctx:
+        print("[CONTROL LOOP] entered", flush=True)
+
+        try:
+            period = 0.01
+            next_t = time.perf_counter()
+
+            with RateRecorder(name=self) as rec:
+                print("[CONTROL LOOP] RateRecorder entered", flush=True)
+
+                loop_i = 0
                 while not self._stop_event.is_set():
-                    rate.sleep()
-                    rec.track()
-                    # extract joint command and current state
+                    loop_i += 1
+
                     with self._cmd_lock:
                         if hasattr(self, "gripper"):
-                            joint_cmd = self._joint_cmd[:-1].copy()
+                            joint_cmd = np.asarray(self._joint_cmd[:-1], dtype=np.float64).copy()
                         else:
-                            joint_cmd = self._joint_cmd.copy()
+                            joint_cmd = np.asarray(self._joint_cmd, dtype=np.float64).copy()
 
-                    state = self.interface.get_state()
-                    self.state = state
+                    # 일단 get_state()도 빼고, command를 바로 넣어서 controller abort부터 막는지 확인
+                    self.ctrl.set_control(joint_cmd)
 
-                    q = state.q
-                    dq = state.dq
-
-                    # compute current & desired end-effector pose
-                    Te = self.fk(q)  # current
-                    Tep = self.fk(joint_cmd)  # desired
-
-                    # position error
-                    x_cur = Te[:3, 3]
-                    x_des = Tep[:3, 3]
-                    dx = x_des - x_cur
-
-                    # orientation error
-                    R_cur = Te[:3, :3]
-                    R_des = Tep[:3, :3]
-                    dtheta = orientation_error(R_cur, R_des)
-
-                    # twist error
-                    err_6d = np.concatenate([dx, dtheta])
-
-                    # Split error for clipping
-                    pos_err = err_6d[:3]
-                    ori_err = err_6d[3:]
-
-                    # Clip the magnitude to preserve direction (better than clipping per-axis)
-                    pos_norm = np.linalg.norm(pos_err)
-                    if pos_norm > MAX_POS_ERR:
-                        pos_err = (pos_err / pos_norm) * MAX_POS_ERR
-
-                    ori_norm = np.linalg.norm(ori_err)
-                    if ori_norm > MAX_ORI_ERR:
-                        ori_err = (ori_err / ori_norm) * MAX_ORI_ERR
-
-                    # Reassemble
-                    err_6d_clipped = np.concatenate([pos_err, ori_err])
-
-                    # mass matrix and augmentation
-                    Mq = self.model.mass(state)
-                    Mq = np.array(Mq).reshape(7, 7)
-                    # Add 0.15 to last 3 diagonal entries
-                    for i in range(4, 7):
-                        Mq[i, i] += 0.15
-                    Mq_inv = np.linalg.inv(Mq)
-
-                    # task jacobian and inertia
-                    J = self.model.zero_jacobian(self.frame, state)
-                    J = np.array(J).reshape(7, 6).transpose()
-
-                    J_Minv_JT = J @ Mq_inv @ J.T
-                    if abs(np.linalg.det(J_Minv_JT)) >= 1e-2:
-                        Mx = np.linalg.inv(J_Minv_JT)
-                    else:
-                        Mx = np.linalg.pinv(J_Minv_JT, rcond=1e-2)
-
-                    # task-space
-                    dX = J @ dq
-
-                    # F_task = KP_6D * err_6d - KD_6D * dX
-
-                    # Using err_6d_clipped for F_task calculation
-                    F_task = KP_6D * err_6d_clipped - KD_6D * dX
-
-                    tau_task = J.T @ (Mx @ F_task)
-
-                    # null-space
-                    dq_null = -Kp_null * (q - joint_cmd) - Kd_null * dq
-                    Jbar = Mq_inv @ J.T @ Mx
-                    if hasattr(self, "gripper"):
-                        tau_null = (np.eye(self._num_dofs - 1) - J.T @ Jbar.T) @ dq_null
-                    else:
-                        tau_null = (np.eye(self._num_dofs) - J.T @ Jbar.T) @ dq_null
-
-                    # command torque
-                    tau = tau_task + tau_null
-                    tau = np.clip(tau, -self.torque_limit, self.torque_limit)
-                    tau[-1] = np.clip(tau[-1], -1.25, 1.25)
-                    time_buff = 20.00
-                    if time.time() - self.ctrl_thread_start_time < time_buff and np.linalg.norm(err_6d) > 0.01:
-                        # start with 2.0 then slowly increase to 100.0 as ctrl_thread_start_time gets closer to time_buff
-                        clip_value = 1.0 + np.clip(
-                            (20.0 - 1.0) * ((time.time() - self.ctrl_thread_start_time) - 5.0) / time_buff, 0.0, 20.0
+                    if loop_i % 50 == 1:
+                        print(
+                            "[JOINT POSITION DEBUG]",
+                            "cmd=", np.round(joint_cmd, 5),
+                            flush=True,
                         )
-                        tau = np.clip(
-                            tau, -clip_value, clip_value
-                        )  # If far away from home pose at init, clip torque to avoid high velocity homing
-                        print(f"Clipping torque to {clip_value}")
-                        print(tau)
 
-                    self.ctrl.set_control(tau)
+                    rec.track()
 
-                    if self._joint_state_saver is not None:
-                        self._joint_state_saver.add(
-                            time.time(),
-                            pos=self.state.q,
-                            vel=self.state.dq,
-                            eff=tau,
-                        )
+                    next_t += period
+                    sleep_s = next_t - time.perf_counter()
+                    if sleep_s > 0:
+                        time.sleep(sleep_s)
+                    else:
+                        next_t = time.perf_counter()
+
+        except BaseException as exc:
+            logger.exception("Franka control_loop crashed")
+            print("[CONTROL LOOP] crashed:", repr(exc), flush=True)
+            raise
+
 
     def enable_arm(self) -> None:
         self.interface.teaching_mode(False)
@@ -298,13 +284,29 @@ class FrankaPanda(Robot):
         assert len(joint_pos) == self._num_dofs, (
             f"Joint position array length mismatch. num_dofs: {self._num_dofs}, joint_pos: {len(joint_pos)}."
         )
+
         self._update_rate.track()
+
         with self._cmd_lock:
-            self._joint_cmd = joint_pos
-            if hasattr(self, "gripper"):
-                self._submit_gripper_width(joint_pos[-1])
+            self._joint_cmd = np.asarray(joint_pos, dtype=np.float64).copy()
+
+        if hasattr(self, "gripper"):
+            arm_cmd = np.asarray(joint_pos[:-1], dtype=np.float64)
+            self._submit_gripper_width(joint_pos[-1])
+        else:
+            arm_cmd = np.asarray(joint_pos, dtype=np.float64)
+
+        # NOTE:
+        # ``self.ctrl.set_control`` is intentionally *not* called from this
+        # command path.  The dedicated control thread in ``run()`` is the only
+        # writer to the controller state and drains ``self._joint_cmd`` at a
+        # fixed rate. Calling ``set_control`` from both threads can block under
+        # load and stall the RobotNode.step() loop (STATUS stays "live" but
+        # STEP/PUB Hz stop updating in the TUI).
 
     def get_observations(self) -> Dict[str, np.ndarray]:
+        # Always read a fresh robot state snapshot.
+        self.state = self.interface.get_state()
         obs = {
             "joint_pos": self.state.q
             if not hasattr(self, "gripper")

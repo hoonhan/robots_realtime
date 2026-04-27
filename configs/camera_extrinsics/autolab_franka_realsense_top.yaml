@@ -10,4 +10,4 @@
 # the `extrinsics_file` field.
 
 position: [1.35, 0.00, 0.53]
-rpy_radians: [-3.14159, -1.13894, 1.57080]
+rpy_radians: [-2.00265, 0.00, 1.57080]
