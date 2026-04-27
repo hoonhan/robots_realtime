@@ -16,6 +16,7 @@ Subscribed topics (configured at construction):
 from __future__ import annotations
 
 import importlib
+import threading
 import time
 
 import numpy as np
@@ -88,6 +89,10 @@ class RobotNode(Node):
         self._robot = robot
         self._cmd_topic = cmd_topic
         self._robot_config = robot_config  # stored for reference; instantiation is caller's job
+        self._cmd_lock = threading.Lock()
+        self._latest_cmd: np.ndarray | None = None
+        self._cmd_stop = threading.Event()
+        self._cmd_thread: threading.Thread | None = None
 
     def setup(self) -> None:
         if self._robot is None:
@@ -97,6 +102,26 @@ class RobotNode(Node):
                     f"(robot_config={self._robot_config!r})"
                 )
             self._robot = _instantiate_from_target_yaml(self._robot_config)
+        # Dispatch command_joint_pos in a background thread so a blocking robot
+        # driver call cannot freeze Node.step()/tick stats.
+        self._cmd_thread = threading.Thread(
+            target=self._command_loop,
+            daemon=True,
+            name=f"{self.name}_command_loop",
+        )
+        self._cmd_thread.start()
+
+    def _command_loop(self) -> None:
+        while not self._cmd_stop.is_set():
+            cmd = None
+            with self._cmd_lock:
+                if self._latest_cmd is not None:
+                    cmd = self._latest_cmd
+                    self._latest_cmd = None
+            if cmd is None:
+                time.sleep(0.001)
+                continue
+            self._robot.command_joint_pos(cmd)
 
     def step(self) -> None:
         ts = time.time()
@@ -114,7 +139,8 @@ class RobotNode(Node):
                         f"[{self.name}] RobotNode: received command #{self._cmd_debug_count}, "
                         f"calling command_joint_pos with {joint_pos}"
                     )
-                self._robot.command_joint_pos(joint_pos)
+                with self._cmd_lock:
+                    self._latest_cmd = joint_pos
             else:
                 if not hasattr(self, '_no_cmd_count'):
                     self._no_cmd_count = 0
@@ -125,6 +151,9 @@ class RobotNode(Node):
         self.publish("joint_state", self._robot.get_observations(), ts=ts)
 
     def cleanup(self) -> None:
+        self._cmd_stop.set()
+        if self._cmd_thread is not None:
+            self._cmd_thread.join(timeout=1.0)
         if hasattr(self._robot, "stop"):
             self._robot.stop()
 
