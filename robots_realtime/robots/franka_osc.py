@@ -296,10 +296,17 @@ class FrankaPanda(Robot):
         else:
             arm_cmd = np.asarray(joint_pos, dtype=np.float64)
 
-        print("[COMMAND DEBUG] ctrl.set_control", np.round(arm_cmd, 5), flush=True)
-        self.ctrl.set_control(arm_cmd)
+        # NOTE:
+        # ``self.ctrl.set_control`` is intentionally *not* called from this
+        # command path.  The dedicated control thread in ``run()`` is the only
+        # writer to the controller state and drains ``self._joint_cmd`` at a
+        # fixed rate. Calling ``set_control`` from both threads can block under
+        # load and stall the RobotNode.step() loop (STATUS stays "live" but
+        # STEP/PUB Hz stop updating in the TUI).
 
     def get_observations(self) -> Dict[str, np.ndarray]:
+        # Always read a fresh robot state snapshot.
+        self.state = self.interface.get_state()
         obs = {
             "joint_pos": self.state.q
             if not hasattr(self, "gripper")
