@@ -204,6 +204,9 @@ class FrankaPanda(Robot):
 
         self._update_rate = RateRecorder(name="update_rate")
         self._update_rate.start()
+        self._slow_set_control_count = 0
+        self._slow_get_state_count = 0
+        self._state_lock_timeout_count = 0
 
         self._server_thread = Thread(target=self.run, name="control_loop", daemon=True)
         self._server_thread.start()
@@ -243,12 +246,34 @@ class FrankaPanda(Robot):
                             joint_cmd = np.asarray(self._joint_cmd, dtype=np.float64).copy()
 
                     # Single writer path for the controller command.
+                    t_set0 = time.perf_counter()
                     self.ctrl.set_control(joint_cmd)
+                    dt_set = time.perf_counter() - t_set0
+                    if dt_set > 0.02:
+                        self._slow_set_control_count += 1
+                        if self._slow_set_control_count % 20 == 1:
+                            print(
+                                f"[FRANKA DEBUG] slow set_control dt={dt_set*1000:.1f}ms "
+                                f"(count={self._slow_set_control_count})",
+                                flush=True,
+                            )
 
-                    # Refresh driver state in the control thread so observer
-                    # calls do not touch panda_py state APIs concurrently.
+                    # Refresh state snapshot in control thread.
+                    # Important: do NOT hold _state_lock while calling get_state()
+                    # because get_state() can block in execution mode.
+                    t_state0 = time.perf_counter()
+                    new_state = self.interface.get_state()
+                    dt_state = time.perf_counter() - t_state0
+                    if dt_state > 0.02:
+                        self._slow_get_state_count += 1
+                        if self._slow_get_state_count % 20 == 1:
+                            print(
+                                f"[FRANKA DEBUG] slow get_state dt={dt_state*1000:.1f}ms "
+                                f"(count={self._slow_get_state_count})",
+                                flush=True,
+                            )
                     with self._state_lock:
-                        self.state = self.interface.get_state()
+                        self.state = new_state
 
                     if loop_i % 50 == 1:
                         print(
@@ -312,7 +337,20 @@ class FrankaPanda(Robot):
 
     def get_observations(self) -> Dict[str, np.ndarray]:
         # Read the latest snapshot cached by the control thread.
-        with self._state_lock:
+        if self._state_lock.acquire(timeout=0.002):
+            try:
+                state = self.state
+            finally:
+                self._state_lock.release()
+        else:
+            # Avoid blocking RobotNode.step(); publish last known snapshot.
+            self._state_lock_timeout_count += 1
+            if self._state_lock_timeout_count % 100 == 1:
+                print(
+                    f"[FRANKA DEBUG] get_observations lock-timeout "
+                    f"(count={self._state_lock_timeout_count})",
+                    flush=True,
+                )
             state = self.state
         obs = {
             "joint_pos": state.q
